@@ -11,6 +11,7 @@ const studentNav: NavItem[] = [
   { href: "/dashboard", label: "Overview" },
   { href: "/competencies", label: "Competencies" },
   { href: "/assessments", label: "Assessments" },
+  { href: "/interviews", label: "Interviews" },
   { href: "/progress", label: "My Progress" },
 ];
 
@@ -25,6 +26,7 @@ const adminNav: NavItem[] = [
   { href: "/admin/questions", label: "Questions" },
   { href: "/admin/competencies", label: "Competencies" },
   { href: "/admin/cohorts", label: "Cohorts" },
+  { href: "/admin/scripts", label: "Scripts" },
 ];
 
 export function AppNav({

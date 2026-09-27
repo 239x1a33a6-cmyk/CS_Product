@@ -48,6 +48,7 @@ export default auth((req) => {
     pathname.startsWith("/dashboard") ||
     pathname.startsWith("/competencies") ||
     pathname.startsWith("/assessments") ||
+    pathname.startsWith("/interviews") ||
     pathname.startsWith("/progress")
   ) {
     if (role === "MENTOR" || role === "ADMIN") {
