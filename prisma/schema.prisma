@@ -1,0 +1,529 @@
+// CS Fundamentals Placement-Readiness Platform
+// Canonical data model — evidence-first, append-only design
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// IDENTITY & ACCESS
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum Role {
+  STUDENT
+  MENTOR
+  ADMIN
+}
+
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  passwordHash  String
+  name          String
+  role          Role     @default(STUDENT)
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  studentProfile    StudentProfile?
+  mentorProfile     MentorProfile?
+  interventions     Intervention[]  @relation("InterventionMentor")
+
+  @@index([email])
+  @@index([role])
+}
+
+model StudentProfile {
+  id                    String   @id @default(cuid())
+  userId                String   @unique
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  cohortId              String?
+  cohort                Cohort?  @relation(fields: [cohortId], references: [id])
+  onboardingCompleted   Boolean  @default(false)
+  enrolledAt            DateTime @default(now())
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  assessments       Assessment[]
+  attempts          Attempt[]
+  masteryStates     MasteryState[]
+  masteryEvidence   MasteryEvidence[]
+  interviewSessions InterviewSession[]
+  interventions     Intervention[]     @relation("InterventionStudent")
+
+  @@index([cohortId])
+}
+
+model MentorProfile {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bio       String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  cohorts       Cohort[]
+  interventions Intervention[] @relation("InterventionMentorProfile")
+}
+
+model Cohort {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  mentorId    String
+  mentor      MentorProfile @relation(fields: [mentorId], references: [id])
+  isActive    Boolean  @default(true)
+  startDate   DateTime?
+  endDate     DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  students StudentProfile[]
+
+  @@index([mentorId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// COMPETENCY GRAPH
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum Subject {
+  OPERATING_SYSTEMS
+  DBMS
+  SQL
+  COMPUTER_NETWORKS
+  OOP
+  SOFTWARE_ENGINEERING
+  COMPUTER_ARCHITECTURE
+  ALGORITHMS
+  DATA_STRUCTURES
+}
+
+enum CompetencyDifficulty {
+  FOUNDATIONAL
+  INTERMEDIATE
+  ADVANCED
+}
+
+model CompetencyNode {
+  id              String               @id @default(cuid())
+  subject         Subject
+  domain          String               // e.g. "Processes & Threads"
+  skill           String               // e.g. "Process Concepts"
+  subSkill        String?              // e.g. "Process States"
+  title           String
+  description     String
+  learningObjective String
+  difficulty      CompetencyDifficulty
+  misconceptions  String[]             // common misconceptions students hold
+  tags            String[]
+  isActive        Boolean              @default(true)
+  version         Int                  @default(1)
+  sortOrder       Int                  @default(0)
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+
+  // Self-referential prerequisite graph
+  prerequisites   CompetencyNode[] @relation("CompetencyPrerequisites")
+  dependents      CompetencyNode[] @relation("CompetencyPrerequisites")
+
+  // Related concepts (non-blocking relationships)
+  relatedNodes    CompetencyNode[] @relation("CompetencyRelated")
+  relatedTo       CompetencyNode[] @relation("CompetencyRelated")
+
+  questions         Question[]
+  masteryStates     MasteryState[]
+  masteryEvidence   MasteryEvidence[]
+  interventions     Intervention[]
+  assessmentNodes   AssessmentCompetencyNode[]
+  interviewScripts  InterviewScript[]
+
+  @@index([subject])
+  @@index([subject, domain])
+  @@index([isActive])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// QUESTION BANK
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum QuestionType {
+  MCQ              // single correct answer
+  MULTI_SELECT     // multiple correct answers
+  SHORT_ANSWER     // free text, short
+  EXPLAIN          // explain in own words
+  SCENARIO         // apply to a situation
+  REASONING        // why/what-if/trade-off
+  COMPARE_CONTRAST // compare two concepts
+  DEBUG            // find the flaw
+}
+
+enum CognitiveLevel {
+  RECALL           // Layer 1: recognition, recall
+  UNDERSTANDING    // Layer 2: explain, describe
+  APPLICATION      // Layer 3: apply to scenario
+  REASONING        // Layer 4: why, trade-offs, what-if
+  DEFENSIBILITY    // Layer 5: interview conditions, follow-ups
+}
+
+enum QuestionDifficulty {
+  EASY
+  MEDIUM
+  HARD
+}
+
+enum ValidationStatus {
+  DRAFT
+  REVIEWED
+  APPROVED
+  DEPRECATED
+}
+
+enum AuthorType {
+  HUMAN
+  AI_GENERATED
+}
+
+model Question {
+  id                    String             @id @default(cuid())
+  competencyNodeId      String
+  competencyNode        CompetencyNode     @relation(fields: [competencyNodeId], references: [id])
+  questionText          String
+  questionType          QuestionType
+  cognitiveLevel        CognitiveLevel
+  difficulty            QuestionDifficulty
+  // For MCQ/MULTI_SELECT: JSON array of {id, text, isCorrect}
+  options               Json?
+  correctAnswer         String?            // For MCQ: option id; for short answer: reference
+  referenceAnswer       String?            // Model answer for open-ended
+  explanation           String             // Why this answer, what to understand
+  misconceptionTargeted String?            // Which misconception this exposes
+  // Rubric for open-ended: JSON {criteria: [{name, description, weight}]}
+  rubric                Json?
+  scenarioContext       String?            // Background context for scenario questions
+  followUpQuestionIds   String[]           // IDs of follow-up questions in bank
+  validationStatus      ValidationStatus   @default(DRAFT)
+  authorType            AuthorType         @default(HUMAN)
+  generatedBy           String?            // AI model version if AI_GENERATED
+  isActive              Boolean            @default(true)
+  version               Int                @default(1)
+  estimatedMinutes      Int                @default(3)
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
+
+  attempts              Attempt[]
+  interviewTurns        InterviewTurn[]
+
+  @@index([competencyNodeId])
+  @@index([cognitiveLevel])
+  @@index([questionType])
+  @@index([validationStatus, isActive])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ASSESSMENT ENGINE
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum AssessmentType {
+  DIAGNOSTIC        // first encounter, broad breadth check
+  PRACTICE          // deliberate practice
+  CHECKPOINT        // end-of-domain check
+  REASSESSMENT      // after intervention
+}
+
+enum AssessmentStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  ABANDONED
+}
+
+model Assessment {
+  id          String           @id @default(cuid())
+  type        AssessmentType
+  studentId   String
+  student     StudentProfile   @relation(fields: [studentId], references: [id])
+  status      AssessmentStatus @default(PENDING)
+  title       String?
+  description String?
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime         @default(now())
+
+  competencyNodes AssessmentCompetencyNode[]
+  attempts        Attempt[]
+
+  @@index([studentId])
+  @@index([type])
+  @@index([status])
+}
+
+model AssessmentCompetencyNode {
+  assessmentId     String
+  assessment       Assessment     @relation(fields: [assessmentId], references: [id])
+  competencyNodeId String
+  competencyNode   CompetencyNode @relation(fields: [competencyNodeId], references: [id])
+
+  @@id([assessmentId, competencyNodeId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ATTEMPT — append-only evidence record
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum EvaluationStatus {
+  AUTO_EVALUATED    // MCQ, auto-scored
+  PENDING_AI        // open-ended, queued for AI
+  AI_EVALUATED      // AI provided first-pass feedback
+  PENDING_MENTOR    // needs mentor review
+  MENTOR_REVIEWED   // mentor has reviewed/overridden
+}
+
+model Attempt {
+  id               String            @id @default(cuid())
+  assessmentId     String?
+  assessment       Assessment?       @relation(fields: [assessmentId], references: [id])
+  questionId       String
+  question         Question          @relation(fields: [questionId], references: [id])
+  studentId        String
+  student          StudentProfile    @relation(fields: [studentId], references: [id])
+  response         String            // student's answer text / selected option id
+  responseMetadata Json?             // time spent, interaction data
+  isCorrect        Boolean?          // null for open-ended pending evaluation
+  scoreRaw         Float?            // 0.0–1.0
+  cognitiveLevel   CognitiveLevel    // mirrors question at time of attempt
+  evaluationStatus EvaluationStatus  @default(AUTO_EVALUATED)
+  // append-only: never update this record after creation
+  createdAt        DateTime          @default(now())
+
+  evaluationFeedback EvaluationFeedback[]
+  masteryEvidence    MasteryEvidence[]
+
+  @@index([studentId])
+  @@index([questionId])
+  @@index([assessmentId])
+  @@index([evaluationStatus])
+  @@index([createdAt])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EVALUATION FEEDBACK — append-only
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum FeedbackSource {
+  AI_FIRST_PASS    // Claude-generated, not yet mentor-reviewed
+  MENTOR_REVIEWED  // mentor reviewed/edited AI feedback
+  MENTOR_AUTHORED  // mentor wrote without AI
+}
+
+model EvaluationFeedback {
+  id                   String         @id @default(cuid())
+  attemptId            String
+  attempt              Attempt        @relation(fields: [attemptId], references: [id])
+  strengths            String?
+  gaps                 String?
+  misconceptionsFound  String[]
+  suggestedRemediation String?
+  scoreAdjusted        Float?         // mentor-adjusted score (overrides attempt.scoreRaw)
+  feedbackSource       FeedbackSource
+  aiModelVersion       String?        // which Claude model/version generated this
+  aiPromptVersion      String?        // which prompt template was used
+  reviewedByMentorId   String?        // User.id of reviewing mentor
+  reviewedAt           DateTime?
+  // append-only
+  createdAt            DateTime       @default(now())
+
+  @@index([attemptId])
+  @@index([feedbackSource])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MASTERY — evidence-first, derived state
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum EvidenceType {
+  ASSESSMENT_ATTEMPT
+  INTERVIEW_PERFORMANCE
+  REASSESSMENT
+  MENTOR_OBSERVATION
+}
+
+enum EvidenceQuality {
+  WEAK
+  PARTIAL
+  SOLID
+  STRONG
+}
+
+// Append-only evidence log
+model MasteryEvidence {
+  id               String          @id @default(cuid())
+  studentId        String
+  student          StudentProfile  @relation(fields: [studentId], references: [id])
+  competencyNodeId String
+  competencyNode   CompetencyNode  @relation(fields: [competencyNodeId], references: [id])
+  evidenceType     EvidenceType
+  attemptId        String?
+  attempt          Attempt?        @relation(fields: [attemptId], references: [id])
+  interviewTurnId  String?
+  interviewTurn    InterviewTurn?  @relation(fields: [interviewTurnId], references: [id])
+  cognitiveLevel   CognitiveLevel
+  quality          EvidenceQuality
+  notes            String?
+  // append-only
+  recordedAt       DateTime        @default(now())
+
+  @@index([studentId, competencyNodeId])
+  @@index([studentId])
+  @@index([recordedAt])
+}
+
+// Derived snapshot — recomputable from MasteryEvidence
+model MasteryState {
+  id                 String         @id @default(cuid())
+  studentId          String
+  student            StudentProfile @relation(fields: [studentId], references: [id])
+  competencyNodeId   String
+  competencyNode     CompetencyNode @relation(fields: [competencyNodeId], references: [id])
+  // Each dimension: 0.0–1.0, null = no evidence yet
+  recallScore        Float?
+  understandingScore Float?
+  applicationScore   Float?
+  reasoningScore     Float?
+  defensibilityScore Float?
+  evidenceCount      Int            @default(0)
+  lastEvidenceAt     DateTime?
+  // When this snapshot was computed
+  computedAt         DateTime       @default(now())
+
+  @@unique([studentId, competencyNodeId])
+  @@index([studentId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INTERVIEW SIMULATION
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum InterviewSessionType {
+  SCRIPTED      // deterministic, mentor-authored branching
+  AI_ASSISTED   // Phase 7+
+}
+
+enum SessionStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  ABANDONED
+}
+
+model InterviewSession {
+  id          String               @id @default(cuid())
+  studentId   String
+  student     StudentProfile       @relation(fields: [studentId], references: [id])
+  scriptId    String?
+  script      InterviewScript?     @relation(fields: [scriptId], references: [id])
+  type        InterviewSessionType @default(SCRIPTED)
+  status      SessionStatus        @default(PENDING)
+  startedAt   DateTime?
+  completedAt DateTime?
+  // append-only
+  createdAt   DateTime             @default(now())
+
+  turns InterviewTurn[]
+
+  @@index([studentId])
+  @@index([status])
+}
+
+// Append-only turn log
+model InterviewTurn {
+  id              String           @id @default(cuid())
+  sessionId       String
+  session         InterviewSession @relation(fields: [sessionId], references: [id])
+  turnIndex       Int
+  questionId      String?
+  question        Question?        @relation(fields: [questionId], references: [id])
+  questionText    String           // stored at turn time, not just FK
+  studentResponse String?
+  evaluationNotes String?
+  scoreRaw        Float?
+  followUpTrigger String?          // which script branch was triggered
+  // append-only
+  createdAt       DateTime         @default(now())
+
+  masteryEvidence MasteryEvidence[]
+
+  @@index([sessionId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INTERVIEW SCRIPT (mentor-authored branching)
+// ─────────────────────────────────────────────────────────────────────────────
+
+model InterviewScript {
+  id               String         @id @default(cuid())
+  competencyNodeId String
+  competencyNode   CompetencyNode @relation(fields: [competencyNodeId], references: [id])
+  title            String
+  description      String?
+  // JSON structure: {startNodeId, nodes: {[id]: {questionText, questionId?, branches: [{condition, nextNodeId}]}}}
+  scriptGraph      Json
+  authoredByUserId String
+  isActive         Boolean        @default(true)
+  version          Int            @default(1)
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  sessions InterviewSession[]
+
+  @@index([competencyNodeId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MENTOR INTERVENTIONS — append-only log
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum InterventionType {
+  REMEDIATION
+  REASSESSMENT_REQUEST
+  ADDITIONAL_PRACTICE
+  NOTE
+  MEETING
+}
+
+enum InterventionStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+model Intervention {
+  id               String             @id @default(cuid())
+  mentorId         String             // User.id
+  mentor           User               @relation("InterventionMentor", fields: [mentorId], references: [id])
+  mentorProfileId  String
+  mentorProfile    MentorProfile      @relation("InterventionMentorProfile", fields: [mentorProfileId], references: [id])
+  studentId        String
+  student          StudentProfile     @relation("InterventionStudent", fields: [studentId], references: [id])
+  competencyNodeId String?
+  competencyNode   CompetencyNode?    @relation(fields: [competencyNodeId], references: [id])
+  type             InterventionType
+  rationale        String             // evidence that triggered this
+  description      String             // what action was prescribed
+  status           InterventionStatus @default(PENDING)
+  outcomeNotes     String?
+  // status updates are the only mutation allowed; creation is append-only
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  @@index([studentId])
+  @@index([mentorId])
+  @@index([status])
+}
